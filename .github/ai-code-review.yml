@@ -1,0 +1,46 @@
+name: AI Code Review (自动触发)
+
+on:
+  pull_request:
+    types: [opened, synchronize]  # 新建PR / 更新代码 都会触发
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 安装 GitHub CLI
+        run: sudo apt-get install gh -y
+
+      - name: 获取 PR Diff
+        run: gh pr diff ${{ github.event.pull_request.number }} > pr.diff
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 调用 Claude AI 做 Code Review
+        run: |
+          curl https://api.anthropic.com/v1/messages \
+            -H "x-api-key: ${{ secrets.ANTHROPIC_API_KEY }}" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "content-type: application/json" \
+            -d '{
+              "model": "claude-3-5-sonnet-20240620",
+              "max_tokens": 4096,
+              "messages": [
+                {
+                  "role": "user",
+                  "content": "你是专业代码审查专家，请对下面的PR代码diff做严格审查：\n1. 检查bug\n2. 检查安全问题\n3. 检查性能问题\n4. 检查代码规范\n5. 给出可直接使用的修复代码\n\n代码：\n'"$(cat pr.diff)"'"
+                }
+              ]
+            }' | jq -r '.content[0].text' > review-result.txt
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+      - name: 将 AI 审查结果发到 PR 评论
+        run: gh pr comment ${{ github.event.pull_request.number }} --body "$(cat review-result.txt)"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
